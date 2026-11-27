@@ -12,10 +12,12 @@ CORS(app)
 
 
 def _normalize_symbol(raw_symbol: str) -> str:
-    symbol = (raw_symbol or 'RELIANCE.NS').strip().upper()
+    symbol = (raw_symbol or 'MARKET').strip().upper()
+    if symbol in ('MARKET', 'INDIA', 'NSE', 'ALL'):
+        return 'MARKET'
     if symbol and '.' not in symbol and '^' not in symbol:
         symbol = f'{symbol}.NS'
-    return symbol or 'RELIANCE.NS'
+    return symbol or 'MARKET'
 
 
 def _fetch_yfinance_news(symbol: str) -> list[dict]:
@@ -48,9 +50,8 @@ def _fetch_yfinance_news(symbol: str) -> list[dict]:
     return items
 
 
-def _fetch_google_news_rss(symbol: str, limit: int = 12) -> list[dict]:
-    base_name = symbol.split('.')[0]
-    query = urllib.parse.quote(f'{base_name} NSE stock')
+def _fetch_google_news_rss(query_text: str, symbol_label: str, limit: int = 12) -> list[dict]:
+    query = urllib.parse.quote(query_text)
     url = f'https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en'
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=6) as resp:
@@ -66,8 +67,8 @@ def _fetch_google_news_rss(symbol: str, limit: int = 12) -> list[dict]:
         if not title:
             continue
         items.append({
-            'id': f'{symbol}-rss-{idx}',
-            'symbol': symbol,
+            'id': f'{symbol_label}-rss-{idx}',
+            'symbol': symbol_label,
             'title': title,
             'link': link,
             'publisher': publisher,
@@ -77,13 +78,37 @@ def _fetch_google_news_rss(symbol: str, limit: int = 12) -> list[dict]:
 
 
 def _extract_news(symbol: str) -> list[dict]:
+    if symbol == 'MARKET':
+        seen_titles = set()
+        merged = []
+        for idx_sym in ('^NSEI', '^BSESN', 'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS'):
+            try:
+                for item in _fetch_yfinance_news(idx_sym):
+                    key = item['title'].strip().lower()
+                    if key not in seen_titles:
+                        seen_titles.add(key)
+                        merged.append(item)
+            except Exception:
+                continue
+        if len(merged) < 8:
+            try:
+                for item in _fetch_google_news_rss('Nifty 50 Sensex NSE Indian stock market', 'MARKET', limit=15):
+                    key = item['title'].strip().lower()
+                    if key not in seen_titles:
+                        seen_titles.add(key)
+                        merged.append(item)
+            except Exception:
+                pass
+        return merged[:20]
+
     try:
         items = _fetch_yfinance_news(symbol)
         if items:
             return items
     except Exception:
         pass
-    return _fetch_google_news_rss(symbol)
+    base_name = symbol.split('.')[0]
+    return _fetch_google_news_rss(f'{base_name} NSE stock', symbol)
 
 
 @app.route('/')
