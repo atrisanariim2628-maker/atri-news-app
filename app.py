@@ -78,37 +78,51 @@ def _fetch_google_news_rss(query_text: str, symbol_label: str, limit: int = 12) 
 
 
 def _extract_news(symbol: str) -> list[dict]:
+    seen_titles: set[str] = set()
+    merged: list[dict] = []
+
+    def _add(items: list[dict]) -> None:
+        for item in items:
+            key = item['title'].strip().lower()
+            if key and key not in seen_titles:
+                seen_titles.add(key)
+                merged.append(item)
+
     if symbol == 'MARKET':
-        seen_titles = set()
-        merged = []
-        for idx_sym in ('^NSEI', '^BSESN', 'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS'):
+        # Primary: Google News RSS — returns today's fresh headlines
+        rss_queries = [
+            ('Nifty 50 NSE India stock market today', 'NIFTY'),
+            ('Sensex BSE India stock market today', 'SENSEX'),
+            ('Indian economy RBI stock market news today', 'INDIA'),
+        ]
+        for q_text, q_label in rss_queries:
             try:
-                for item in _fetch_yfinance_news(idx_sym):
-                    key = item['title'].strip().lower()
-                    if key not in seen_titles:
-                        seen_titles.add(key)
-                        merged.append(item)
-            except Exception:
-                continue
-        if len(merged) < 8:
-            try:
-                for item in _fetch_google_news_rss('Nifty 50 Sensex NSE Indian stock market', 'MARKET', limit=15):
-                    key = item['title'].strip().lower()
-                    if key not in seen_titles:
-                        seen_titles.add(key)
-                        merged.append(item)
+                _add(_fetch_google_news_rss(q_text, q_label, limit=10))
             except Exception:
                 pass
-        return merged[:20]
 
+        # Fallback: yfinance if RSS returned few results
+        if len(merged) < 8:
+            for idx_sym in ('^NSEI', '^BSESN', 'RELIANCE.NS', 'TCS.NS'):
+                try:
+                    _add(_fetch_yfinance_news(idx_sym))
+                except Exception:
+                    continue
+
+        return merged[:25]
+
+    # Single symbol: RSS first (fresher), then yfinance
+    base_name = symbol.split('.')[0]
     try:
-        items = _fetch_yfinance_news(symbol)
-        if items:
-            return items
+        _add(_fetch_google_news_rss(f'{base_name} NSE stock today', symbol, limit=12))
     except Exception:
         pass
-    base_name = symbol.split('.')[0]
-    return _fetch_google_news_rss(f'{base_name} NSE stock', symbol)
+    if not merged:
+        try:
+            _add(_fetch_yfinance_news(symbol))
+        except Exception:
+            pass
+    return merged
 
 
 @app.route('/')
