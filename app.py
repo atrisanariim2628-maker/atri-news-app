@@ -1,6 +1,9 @@
 from flask import Flask, Response, jsonify, request
 import json
 import os
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 import yfinance as yf
 from flask_cors import CORS
 
@@ -15,7 +18,7 @@ def _normalize_symbol(raw_symbol: str) -> str:
     return symbol or 'RELIANCE.NS'
 
 
-def _extract_news(symbol: str) -> list[dict]:
+def _fetch_yfinance_news(symbol: str) -> list[dict]:
     ticker = yf.Ticker(symbol)
     raw_items = ticker.news or []
     items = []
@@ -43,6 +46,44 @@ def _extract_news(symbol: str) -> list[dict]:
             'pubDate': content.get('pubDate') or content.get('displayTime') or '',
         })
     return items
+
+
+def _fetch_google_news_rss(symbol: str, limit: int = 12) -> list[dict]:
+    base_name = symbol.split('.')[0]
+    query = urllib.parse.quote(f'{base_name} NSE stock')
+    url = f'https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en'
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=6) as resp:
+        xml_bytes = resp.read()
+    root = ET.fromstring(xml_bytes)
+    items = []
+    for idx, elem in enumerate(root.findall('./channel/item')[:limit]):
+        title = (elem.findtext('title') or '').strip()
+        link = (elem.findtext('link') or '').strip()
+        pub_date = (elem.findtext('pubDate') or '').strip()
+        source_el = elem.find('source')
+        publisher = source_el.text.strip() if source_el is not None and source_el.text else 'Google News'
+        if not title:
+            continue
+        items.append({
+            'id': f'{symbol}-rss-{idx}',
+            'symbol': symbol,
+            'title': title,
+            'link': link,
+            'publisher': publisher,
+            'pubDate': pub_date,
+        })
+    return items
+
+
+def _extract_news(symbol: str) -> list[dict]:
+    try:
+        items = _fetch_yfinance_news(symbol)
+        if items:
+            return items
+    except Exception:
+        pass
+    return _fetch_google_news_rss(symbol)
 
 
 @app.route('/')
